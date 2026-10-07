@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>THE CRYPT OF ELDERMERE</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #000; }
+  body {
+    font-family: 'Courier New', Courier, monospace;
+    color: #33ff66;
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  #screen {
+    width: 100%; max-width: 780px; height: 92vh; max-height: 700px;
+    background: #020a02;
+    border: 2px solid #33ff66;
+    border-radius: 6px;
+    padding: 16px 18px;
+    display: flex; flex-direction: column;
+    box-shadow: 0 0 30px rgba(51,255,102,0.25), inset 0 0 50px rgba(51,255,102,0.05);
+    position: relative; overflow: hidden;
+    animation: flicker 5s infinite;
+  }
+  #output {
+    flex: 1; overflow-y: auto; overflow-x: hidden;
+    white-space: pre-wrap; word-wrap: break-word;
+    font-size: 15px; line-height: 1.55;
+    text-shadow: 0 0 5px rgba(51,255,102,0.6);
+    padding-right: 6px;
+  }
+  #inputline {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 10px; font-size: 15px;
+    text-shadow: 0 0 5px rgba(51,255,102,0.6);
+    border-top: 1px solid #1a6b33; padding-top: 10px;
+  }
+  #prompt { color: #33ff66; }
+  #input {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: #33ff66; font-family: inherit; font-size: 15px;
+    text-shadow: 0 0 5px rgba(51,255,102,0.6);
+    caret-color: #33ff66;
+  }
+  #input::placeholder { color: #1a6b33; }
+  #output::-webkit-scrollbar { width: 8px; }
+  #output::-webkit-scrollbar-thumb { background: #1a6b33; border-radius: 4px; }
+  #output::-webkit-scrollbar-track { background: transparent; }
+  #output { scrollbar-color: #1a6b33 transparent; }
+  /* CRT scanlines */
+  #screen::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg,
+      rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px,
+      rgba(0,0,0,0.16) 3px, rgba(0,0,0,0.16) 3px);
+    z-index: 2;
+  }
+  @keyframes flicker {
+    0% { opacity: 1; } 50% { opacity: 0.97; }
+    51% { opacity: 0.93; } 100% { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+  <div id="screen">
+    <div id="output"></div>
+    <div id="inputline">
+      <span id="prompt">&gt;</span>
+      <input id="input" autocomplete="off" autocorrect="off" autocapitalize="off"
+             spellcheck="false" placeholder="type a command, then ENTER  (try: help)" />
+    </div>
+  </div>
+<script>
+"use strict";
+
+// ===================== GAME DATA =====================
+const ROOMS = {
+  forest: {
+    name: "FOREST CLEARING",
+    desc: "Mist coils between the trees. A crumbling stone archway stands to the NORTH,\nits keystone carved with a rune you almost remember. Something glints in the\nlong grass at your feet.",
+    exits: { n: "archway" },
+    items: ["lantern"]
+  },
+  archway: {
+    name: "STONE ARCHWAY",
+    desc: "You stand beneath the archway. The mist ends here, cut off like a curtain\ndrawn shut. A damp passage runs NORTH into the hillside. A narrow path\nwinds WEST. SOUTH leads back to the clearing.",
+    exits: { n: "hall", s: "forest", w: "grotto" }
+  },
+  grotto: {
+    name: "MOSSY GROTTO",
+    desc: "A small grotto walled with moss that glows a faint blue, as if the stone\nremembered the sky. A pedestal stands at the centre, and upon it rests a\nrusty key. The only way out is EAST.",
+    exits: { e: "archway" },
+    items: ["key"]
+  },
+  hall: {
+    name: "ENTRANCE HALL",
+    desc: "A vast hall of cracked and leaning pillars. Pale roots hang where the\nceiling once was. A notched sword is mounted on the far wall. Passages\nlead EAST and SOUTH.",
+    exits: { e: "corridor", s: "archway" },
+    items: ["sword"]
+  },
+  corridor: {
+    name: "DARK CORRIDOR",
+    descLit: "A long corridor of black stone. Your lantern throws jumping shadows against\nthe walls. The passage runs NORTH. An iron-bound door stands to the EAST.\nWEST leads back to the hall.",
+    descDark: "It is pitch black. You cannot see your hand before your face. The dark is\nthick and old, and something seems to breathe in it.",
+    exits: { n: "river", e: "chamber", w: "hall" },
+    dark: true
+  },
+  river: {
+    name: "UNDERGROUND RIVER",
+    desc: "A swift cold river bars your way, vanishing into dark on either side. A\nfrayed rope hangs from an iron ring in the ceiling. SOUTH leads back to\nthe corridor.",
+    exits: { s: "corridor", n: "crystal" },
+    items: ["rope"]
+  },
+  crystal: {
+    name: "CRYSTAL CAVERN",
+    desc: "A cavern roofed with crystals that chime softly, filling the air with pale\nlight. Upon a low altar rests an ancient scroll, sealed with dark wax.\nSOUTH leads back to the river.",
+    exits: { s: "river" },
+    items: ["scroll"]
+  },
+  chamber: {
+    name: "TREASURE CHAMBER",
+    desc: "A round chamber heaped with dust. A stone guardian stands before a mound\nof gold, its eyes dark and watching. WEST leads back to the corridor.",
+    descClear: "A round chamber heaped with dust. Rubble marks where the stone guardian\nstood. The mound of gold is gone. WEST leads back to the corridor.",
+    exits: { w: "corridor" },
+    items: ["gold"]
+  }
+};
+
+const ITEMS = {
+  lantern: { name: "a rusty lantern", desc: "A brass lantern, heavy with age. It still smells faintly of oil." },
+  key:      { name: "a rusty key",     desc: "An iron key furred with rust, but the teeth are sound." },
+  sword:    { name: "a notched sword", desc: "An old sword, its blade notched from many blows. Still, it is a sword." },
+  rope:     { name: "a frayed rope",   desc: "A long rope, frayed at one end but strong enough to bear a weight." },
+  gold:     { name: "a heap of gold",  desc: "Gold coins and cups, dull with age. A king's ransom, if kings still lived." },
+  scroll:   { name: "an ancient scroll", desc: "A scroll of cracked leather, sealed with dark wax. The fate of Eldermere is written within." }
+};
+
+const state = {
+  current: "forest",
+  inv: [],
+  flags: { doorOpen: false, guardianDown: false, won: false, quit: false },
+  moves: 0
+};
+
+const DIR_WORDS = { north:"n", south:"s", east:"e", west:"w", up:"u", down:"d" };
+const DIR_SHORT = new Set(["n","s","e","w","u","d"]);
+
+// ===================== TERMINAL I/O =====================
+const out   = document.getElementById("output");
+const input = document.getElementById("input");
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let typing = false, skip = false, running = false;
+
+function scrollBottom(){ out.scrollTop = out.scrollHeight; }
+
+function echo(text){
+  out.appendChild(document.createTextNode(text + "\n"));
+  scrollBottom();
+}
+
+async function typeText(text, speed = 11){
+  typing = true; skip = false;
+  const node = document.createTextNode("");
+  out.appendChild(node);
+  for (let i = 0; i < text.length; i++){
+    node.data += text[i];
+    scrollBottom();
+    if (skip){ node.data += text.slice(i + 1); scrollBottom(); break; }
+    await sleep(speed);
+  }
+  out.appendChild(document.createTextNode("\n"));
+  typing = false;
+  scrollBottom();
+}
+
+// ===================== HELPERS =====================
+const has = item => state.inv.includes(item);
+const roomItems = () => ROOMS[state.current].items || [];
+const isDark = () => ROOMS[state.current].dark && !has("lantern");
+
+// ===================== COMMANDS =====================
+async function look(){
+  const r = ROOMS[state.current];
+  await typeText("");
+  await typeText(r.name);
+  await typeText("-".repeat(r.name.length));
+  if (r.dark && !has("lantern")){
+    await typeText(r.descDark);
+    await typeText("\nIt is too dark to see the way. (Try going WEST to retreat, or find a light.)");
+    return;
+  }
+  let desc = r.dark ? r.descLit : r.desc;
+  if (state.current === "chamber" && state.flags.guardianDown) desc = r.descClear;
+  await typeText(desc);
+  const its = roomItems();
+  if (its.length){
+    await typeText("\nYou see here: " + its.map(i => ITEMS[i].name).join(", ") + ".");
+  }
+  if (state.current === "corridor"){
+    await typeText(state.flags.doorOpen
+      ? "\nThe iron door to the EAST stands open."
+      : "\nThe iron door to the EAST is shut and locked.");
+  }
+}
+
+async function move(dir){
+  const r = ROOMS[state.current];
+  // darkness: only retreat west is safe
+  if (r.dark && !has("lantern")){
+    if (dir === "w"){
+      state.current = "hall"; state.moves++;
+      await typeText("You grope blindly along the wall and stumble WEST, back to the hall.");
+      await look();
+    } else {
+      await typeText("It is pitch black. You dare not stumble into the unknown. (Find a light.)");
+    }
+    return;
+  }
+  if (!(dir in r.exits)){ await typeText("You can't go that way."); return; }
+  const dest = r.exits[dir];
+
+  // locked door to the treasure chamber
+  if (dest === "chamber" && !state.flags.doorOpen){
+    if (has("key")){
+      state.flags.doorOpen = true;
+      await typeText("You fit the rusty key to the lock. It turns with a grinding screech.\nThe iron door swings open.");
+    } else {
+      await typeText("The iron door is locked. You'll need a key.");
+      return;
+    }
+  }
+  // crossing the underground river northward
+  if (state.current === "river" && dir === "n"){
+    if (has("rope")){
+      await typeText("You loop the rope about the iron ring and swing across the cold river,\nboots dripping on the far side.");
+    } else {
+      await typeText("The river runs too swift to ford. You would be swept into the dark.\nYou need a way across.");
+      return;
+    }
+  }
+  state.current = dest; state.moves++;
+  await look();
+}
+
+async function take(item){
+  if (!item){ await typeText("Take what?"); return; }
+  const its = roomItems();
+  if (!its.includes(item)){
+    if (has(item)) await typeText("You already carry " + ITEMS[item].name + ".");
+    else await typeText("There is no " + item + " here.");
+    return;
+  }
+  // the gold is guarded
+  if (item === "gold" && !state.flags.guardianDown){
+    if (has("sword")){
+      state.flags.guardianDown = true;
+      ROOMS[state.current].items = its.filter(x => x !== "gold");
+      state.inv.push("gold");
+      await typeText("You raise the notched sword. The guardian's eyes flare red - then gutter\nout. It crumbles to rubble and dust. You take the gold.");
+    } else {
+      await typeText("The stone guardian blocks the gold. Its eyes flicker toward you.\nYou dare not reach past it unarmed.");
+    }
+    return;
+  }
+  ROOMS[state.current].items = its.filter(x => x !== item);
+  state.inv.push(item);
+  await typeText("Taken: " + ITEMS[item].name + ".");
+}
+
+async function drop(item){
+  if (!item){ await typeText("Drop what?"); return; }
+  if (!has(item)){ await typeText("You don't carry that."); return; }
+  state.inv = state.inv.filter(x => x !== item);
+  ROOMS[state.current].items = (ROOMS[state.current].items || []).concat(item);
+  await typeText("Dropped: " + ITEMS[item].name + ".");
+}
+
+async function inventory(){
+  await typeText("");
+  await typeText("You are carrying:");
+  if (!state.inv.length){ await typeText("  nothing."); return; }
+  for (const i of state.inv) await typeText("  - " + ITEMS[i].name);
+}
+
+async function examine(item){
+  if (!item){ await typeText("Examine what?"); return; }
+  if (has(item) || roomItems().includes(item)){
+    await typeText(ITEMS[item].desc);
+  } else {
+    await typeText("You see no " + item + " here.");
+  }
+}
+
+async function readItem(item){
+  if (!item){ await typeText("Read what?"); return; }
+  if (item === "scroll"){
+    if (has("scroll")){ await winSequence(); return; }
+    if (roomItems().includes("scroll")){ await typeText("You must take the scroll before you can read it."); return; }
+    await typeText("You see no scroll here."); return;
+  }
+  await typeText("There is nothing to read on " + (ITEMS[item] ? ITEMS[item].name : item) + ".");
+}
+
+async function help(){
+  await typeText("");
+  await typeText("COMMANDS:");
+  await typeText("  look / l            - describe your surroundings");
+  await typeText("  go north  /  n      - move (n, s, e, w, up, down)");
+  await typeText("  take <item>         - pick something up");
+  await typeText("  drop <item>         - set something down");
+  await typeText("  inventory / i       - list what you carry");
+  await typeText("  examine <item>      - look closely at something");
+  await typeText("  read <item>         - read something");
+  await typeText("  help / h            - this list");
+  await typeText("  quit / q            - give up");
+  await typeText("");
+  await typeText("HINT: in the dark, find a light. Some doors need keys. Some");
+  await typeText("      rivers need a rope. Some treasures need a sword.");
+}
+
+async function winSequence(){
+  state.flags.won = true;
+  await typeText("");
+  await typeText("You break the dark wax and unroll the scroll. The script is old, older");
+  await typeText("than the stones about you.");
+  await sleep(500);
+  await typeText("");
+  await typeText('  "To the one who reads these words: the silence of Eldermere was');
+  await typeText('   never death, but a waiting. You have walked its halls while the');
+  await typeText('   kingdom slept. Take what gold you will. The rest, leave to the');
+  await typeText('   moss and the dark. Go now, into the light. Remember us."');
+  await sleep(600);
+  await typeText("");
+  await typeText("The crystals chime one last time, and fall still.");
+  await sleep(500);
+  await typeText("");
+  await typeText("    *** YOU HAVE FOUND THE TRUTH OF ELDERMERE ***");
+  await typeText("");
+  await typeText("    Moves taken : " + state.moves);
+  await typeText("    Relics held : " + state.inv.filter(i => i === "gold" || i === "scroll").length + " of 2");
+  await typeText("");
+  await typeText("    T H E   E N D");
+  await typeText("");
+  await typeText("(Refresh the page to play again.)");
+  input.disabled = true;
+}
+
+// ===================== PARSER =====================
+async function processCommand(raw){
+  const text = raw.trim().toLowerCase();
+  if (!text || state.flags.won || state.flags.quit) return;
+  const parts = text.split(/\s+/);
+  const verb = parts[0];
+  const noun = parts.slice(1).join(" ");
+
+  // bare direction
+  if (DIR_SHORT.has(verb) || verb in DIR_WORDS){
+    await move(DIR_SHORT.has(verb) ? verb : DIR_WORDS[verb]);
+    return;
+  }
+
+  switch (verb){
+    case "go": case "walk": case "move": {
+      if (!noun){ await typeText("Go where?"); return; }
+      let d;
+      if (DIR_SHORT.has(noun)) d = noun;
+      else if (noun in DIR_WORDS) d = DIR_WORDS[noun];
+      else { await typeText("Go which way? (north, south, east, west, up, down)"); return; }
+      await move(d); return;
+    }
+    case "look": case "l":           await look(); return;
+    case "take": case "get": case "grab": case "pick": await take(noun); return;
+    case "drop":                     await drop(noun); return;
+    case "inventory": case "inv": case "i": await inventory(); return;
+    case "examine": case "x": case "inspect": case "look_at": await examine(noun); return;
+    case "read":                     await readItem(noun); return;
+    case "help": case "h": case "?": await help(); return;
+    case "quit": case "q": case "exit":
+      state.flags.quit = true;
+      await typeText("You turn your back on the crypt. Eldermere sleeps on.");
+      await typeText("(Refresh the page to try again.)");
+      input.disabled = true;
+      return;
+    default:
+      await typeText("I don't understand \"" + text + "\". Type HELP for commands.");
+  }
+}
+
+// ===================== INPUT LOOP =====================
+input.addEventListener("keydown", async (e) => {
+  if (e.key !== "Enter"){
+    if (typing) skip = true;   // any key speeds up the typewriter
+    return;
+  }
+  if (running) return;
+  const val = input.value;
+  input.value = "";
+  echo("> " + val);
+  running = true;
+  await processCommand(val);
+  running = false;
+  if (!state.flags.won && !state.flags.quit) input.focus();
+  scrollBottom();
+});
+
+// ===================== BOOT / INTRO =====================
+async function boot(){
+  await typeText("ELDERMERE OS v1.2   (C) 1976 CRYPT SYSTEMS", 16);
+  await typeText("BOOTING...", 28);
+  await sleep(450);
+  await typeText("MOUNTING /crypt/eldermere ........ [ OK ]", 7);
+  await typeText("LOADING WORLD DATA .............. [ OK ]", 7);
+  await typeText("CALIBRATING DARKNESS ............ [ OK ]", 7);
+  await sleep(400);
+  await typeText("");
+  await typeText("  ***************************************");
+  await typeText("  *                                     *");
+  await typeText("  *     T H E   C R Y P T   O F         *");
+  await typeText("  *         E L D E R M E R E           *");
+  await typeText("  *                                     *");
+  await typeText("  *      a text adventure  -  (c) 1976  *");
+  await typeText("  *                                     *");
+  await typeText("  ***************************************");
+  await typeText("");
+  await sleep(350);
+  await typeText("Long ago the kingdom of Eldermere fell silent. Its king vanished, its");
+  await typeText("people walked out into the mist and were seen no more. They say the");
+  await typeText("reason sleeps in the crypt beneath the hill - sealed in a scroll of");
+  await typeText("wax and old leather.");
+  await typeText("");
+  await typeText("You have come to read it.");
+  await typeText("");
+  await typeText("Type HELP at any time for a list of commands. (Press any key to speed");
+  await typeText("up the text.)");
+  await typeText("");
+  await look();
+  input.focus();
+}
+boot();
+</script>
+</body>
+</html>

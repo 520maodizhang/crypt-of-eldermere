@@ -1,0 +1,11 @@
+{
+  "appId": "com.eldermere.crypt",
+  "appName": "Crypt of Eldermere",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}
